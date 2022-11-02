@@ -2,9 +2,9 @@ package config
 
 import (
 	"container/list"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Dreamacro/clash/constant/sniffer"
 	"net"
 	"net/netip"
 	"net/url"
@@ -30,6 +30,7 @@ import (
 	"github.com/Dreamacro/clash/component/trie"
 	C "github.com/Dreamacro/clash/constant"
 	providerTypes "github.com/Dreamacro/clash/constant/provider"
+	"github.com/Dreamacro/clash/constant/sniffer"
 	snifferTypes "github.com/Dreamacro/clash/constant/sniffer"
 	"github.com/Dreamacro/clash/dns"
 	"github.com/Dreamacro/clash/log"
@@ -107,12 +108,14 @@ type Profile struct {
 }
 
 type Sniffer struct {
-	Enable      bool
-	Sniffers    []sniffer.Type
-	Reverses    *trie.DomainTrie[bool]
-	ForceDomain *trie.DomainTrie[bool]
-	SkipDomain  *trie.DomainTrie[bool]
-	Ports       *[]utils.Range[uint16]
+	Enable          bool
+	Sniffers        []sniffer.Type
+	Reverses        *trie.DomainTrie[bool]
+	ForceDomain     *trie.DomainTrie[bool]
+	SkipDomain      *trie.DomainTrie[bool]
+	Ports           *[]utils.Range[uint16]
+	ForceDnsMapping bool
+	ParsePureIp     bool
 }
 
 // Experimental config
@@ -128,6 +131,7 @@ type Config struct {
 	Hosts         *trie.DomainTrie[netip.Addr]
 	Profile       *Profile
 	Rules         []C.Rule
+	SubRules      *map[string][]C.Rule
 	Users         []auth.AuthUser
 	Proxies       map[string]C.Proxy
 	Providers     map[string]providerTypes.ProxyProvider
@@ -199,7 +203,7 @@ type RawConfig struct {
 	Proxy         []map[string]any          `yaml:"proxies" json:"proxies"`
 	ProxyGroup    []map[string]any          `yaml:"proxy-groups" json:"proxy-groups"`
 	Rule          []string                  `yaml:"rules" json:"rules"`
-
+	SubRules      map[string][]string       `yaml:"sub-rules"`
 	ClashForAndroid RawClashForAndroid `yaml:"clash-for-android" json:"clash-for-android"`
 }
 
@@ -210,11 +214,13 @@ type RawGeoXUrl struct {
 }
 
 type RawSniffer struct {
-	Enable      bool     `yaml:"enable" json:"enable"`
-	Sniffing    []string `yaml:"sniffing" json:"sniffing"`
-	ForceDomain []string `yaml:"force-domain" json:"force-domain"`
-	SkipDomain  []string `yaml:"skip-domain" json:"skip-domain"`
-	Ports       []string `yaml:"port-whitelist" json:"port-whitelist"`
+	Enable          bool     `yaml:"enable" json:"enable"`
+	Sniffing        []string `yaml:"sniffing" json:"sniffing"`
+	ForceDomain     []string `yaml:"force-domain" json:"force-domain"`
+	SkipDomain      []string `yaml:"skip-domain" json:"skip-domain"`
+	Ports           []string `yaml:"port-whitelist" json:"port-whitelist"`
+	ForceDnsMapping bool     `yaml:"force-dns-mapping" json:"force-dns-mapping"`
+	ParsePureIp     bool     `yaml:"parse-pure-ip" json:"parse-pure-ip"`
 }
 
 var (
@@ -280,11 +286,13 @@ func UnmarshalRawConfig(buf []byte) (*RawConfig, error) {
 			},
 		},
 		Sniffer: RawSniffer{
-			Enable:      false,
-			Sniffing:    []string{},
-			ForceDomain: []string{},
-			SkipDomain:  []string{},
-			Ports:       []string{},
+			Enable:          false,
+			Sniffing:        []string{},
+			ForceDomain:     []string{},
+			SkipDomain:      []string{},
+			Ports:           []string{},
+			ForceDnsMapping: true,
+			ParsePureIp:     true,
 		},
 		Profile: Profile{
 			StoreSelected: true,
@@ -325,12 +333,18 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	config.Proxies = proxies
 	config.Providers = providers
 
-	rules, ruleProviders, err := parseRules(rawCfg, proxies)
+	subRules, ruleProviders, err := parseSubRules(rawCfg, proxies)
+	if err != nil {
+		return nil, err
+	}
+	config.SubRules = subRules
+	config.RuleProviders = ruleProviders
+
+	rules, err := parseRules(rawCfg, proxies, subRules)
 	if err != nil {
 		return nil, err
 	}
 	config.Rules = rules
-	config.RuleProviders = ruleProviders
 
 	hosts, err := parseHosts(rawCfg)
 	if err != nil {
@@ -499,8 +513,9 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	return proxies, providersMap, nil
 }
 
-func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, map[string]providerTypes.RuleProvider, error) {
-	ruleProviders := map[string]providerTypes.RuleProvider{}
+func parseSubRules(cfg *RawConfig, proxies map[string]C.Proxy) (subRules *map[string][]C.Rule, ruleProviders map[string]providerTypes.RuleProvider, err error) {
+	ruleProviders = map[string]providerTypes.RuleProvider{}
+	subRules = &map[string][]C.Rule{}
 	log.Infoln("Geodata Loader mode: %s", geodata.LoaderName())
 	// parse rule provider
 	for name, mapping := range cfg.RuleProvider {
@@ -513,6 +528,102 @@ func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, map[strin
 		RP.SetRuleProvider(rp)
 	}
 
+	for name, rawRules := range cfg.SubRules {
+		var rules []C.Rule
+		for idx, line := range rawRules {
+			rawRule := trimArr(strings.Split(line, ","))
+			var (
+				payload  string
+				target   string
+				params   []string
+				ruleName = strings.ToUpper(rawRule[0])
+			)
+
+			l := len(rawRule)
+
+			if ruleName == "NOT" || ruleName == "OR" || ruleName == "AND" || ruleName == "SUB-RULE" {
+				target = rawRule[l-1]
+				payload = strings.Join(rawRule[1:l-1], ",")
+			} else {
+				if l < 2 {
+					return nil, nil, fmt.Errorf("sub-rules[%d] [%s] error: format invalid", idx, line)
+				}
+				if l < 4 {
+					rawRule = append(rawRule, make([]string, 4-l)...)
+				}
+				if ruleName == "MATCH" {
+					l = 2
+				}
+				if l >= 3 {
+					l = 3
+					payload = rawRule[1]
+				}
+				target = rawRule[l-1]
+				params = rawRule[l:]
+			}
+
+			if _, ok := proxies[target]; !ok && ruleName != "SUB-RULE" {
+				return nil, nil, fmt.Errorf("sub-rules[%d:%s] [%s] error: proxy [%s] not found", idx, name, line, target)
+			}
+
+			params = trimArr(params)
+			parsed, parseErr := R.ParseRule(ruleName, payload, target, params, subRules)
+			if parseErr != nil {
+				return nil, nil, fmt.Errorf("sub-rules[%d] [%s] error: %s", idx, line, parseErr.Error())
+			}
+
+			rules = append(rules, parsed)
+		}
+		(*subRules)[name] = rules
+	}
+
+	if err = verifySubRule(subRules); err != nil {
+		return nil, nil, err
+	}
+
+	return
+}
+
+func verifySubRule(subRules *map[string][]C.Rule) error {
+	for name := range *subRules {
+		err := verifySubRuleCircularReferences(name, subRules, []string{})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifySubRuleCircularReferences(n string, subRules *map[string][]C.Rule, arr []string) error {
+	isInArray := func(v string, array []string) bool {
+		for _, c := range array {
+			if v == c {
+				return true
+			}
+		}
+		return false
+	}
+
+	arr = append(arr, n)
+	for i, rule := range (*subRules)[n] {
+		if rule.RuleType() == C.SubRules {
+			if _, ok := (*subRules)[rule.Adapter()]; !ok {
+				return fmt.Errorf("sub-rule[%d:%s] error: [%s] not found", i, n, rule.Adapter())
+			}
+			if isInArray(rule.Adapter(), arr) {
+				arr = append(arr, rule.Adapter())
+				return fmt.Errorf("sub-rule error: circular references [%s]", strings.Join(arr, "->"))
+			}
+
+			if err := verifySubRuleCircularReferences(rule.Adapter(), subRules, arr); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func parseRules(cfg *RawConfig, proxies map[string]C.Proxy, subRules *map[string][]C.Rule) ([]C.Rule, error) {
 	var rules []C.Rule
 	rulesConfig := cfg.Rule
 
@@ -528,12 +639,12 @@ func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, map[strin
 
 		l := len(rule)
 
-		if ruleName == "NOT" || ruleName == "OR" || ruleName == "AND" {
+		if ruleName == "NOT" || ruleName == "OR" || ruleName == "AND" || ruleName == "SUB-RULE" {
 			target = rule[l-1]
 			payload = strings.Join(rule[1:l-1], ",")
 		} else {
 			if l < 2 {
-				return nil, nil, fmt.Errorf("rules[%d] [%s] error: format invalid", idx, line)
+				return nil, fmt.Errorf("rules[%d] [%s] error: format invalid", idx, line)
 			}
 			if l < 4 {
 				rule = append(rule, make([]string, 4-l)...)
@@ -548,15 +659,18 @@ func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, map[strin
 			target = rule[l-1]
 			params = rule[l:]
 		}
-
 		if _, ok := proxies[target]; !ok {
-			return nil, nil, fmt.Errorf("rules[%d] [%s] error: proxy [%s] not found", idx, line, target)
+			if ruleName != "SUB-RULE" {
+				return nil, fmt.Errorf("rules[%d] [%s] error: proxy [%s] not found", idx, line, target)
+			} else if _, ok = (*subRules)[target]; !ok {
+				return nil, fmt.Errorf("rules[%d] [%s] error: sub-rule [%s] not found", idx, line, target)
+			}
 		}
 
 		params = trimArr(params)
-		parsed, parseErr := R.ParseRule(ruleName, payload, target, params)
+		parsed, parseErr := R.ParseRule(ruleName, payload, target, params, subRules)
 		if parseErr != nil {
-			return nil, nil, fmt.Errorf("rules[%d] [%s] error: %s", idx, line, parseErr.Error())
+			return nil, fmt.Errorf("rules[%d] [%s] error: %s", idx, line, parseErr.Error())
 		}
 
 		rules = append(rules, parsed)
@@ -564,7 +678,7 @@ func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, map[strin
 
 	runtime.GC()
 
-	return rules, ruleProviders, nil
+	return rules, nil
 }
 
 func parseHosts(cfg *RawConfig) (*trie.DomainTrie[netip.Addr], error) {
@@ -868,7 +982,9 @@ func parseAuthentication(rawRecords []string) []auth.AuthUser {
 
 func parseSniffer(snifferRaw RawSniffer) (*Sniffer, error) {
 	sniffer := &Sniffer{
-		Enable: snifferRaw.Enable,
+		Enable:          snifferRaw.Enable,
+		ForceDnsMapping: snifferRaw.ForceDnsMapping,
+		ParsePureIp:     snifferRaw.ParsePureIp,
 	}
 
 	var ports []utils.Range[uint16]
