@@ -2,7 +2,6 @@ package config
 
 import (
 	"container/list"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -192,19 +191,19 @@ type RawConfig struct {
 	TCPConcurrent      bool         `yaml:"tcp-concurrent" json:"tcp-concurrent"`
 	EnableProcess      bool         `yaml:"enable-process" json:"enable-process"`
 
-	Sniffer       RawSniffer                `yaml:"sniffer" json:"sniffer"`
-	ProxyProvider map[string]map[string]any `yaml:"proxy-providers" json:"proxy-providers"`
-	RuleProvider  map[string]map[string]any `yaml:"rule-providers" json:"rule-provider"`
-	Hosts         map[string]string         `yaml:"hosts" json:"hosts"`
-	DNS           RawDNS                    `yaml:"dns" json:"dns"`
-	Experimental  Experimental              `yaml:"experimental" json:"experimental"`
-	Profile       Profile                   `yaml:"profile" json:"profile"`
-	GeoXUrl       RawGeoXUrl                `yaml:"geox-url" json:"geox-url"`
-	Proxy         []map[string]any          `yaml:"proxies" json:"proxies"`
-	ProxyGroup    []map[string]any          `yaml:"proxy-groups" json:"proxy-groups"`
-	Rule          []string                  `yaml:"rules" json:"rules"`
-	SubRules      map[string][]string       `yaml:"sub-rules"`
-	ClashForAndroid RawClashForAndroid `yaml:"clash-for-android" json:"clash-for-android"`
+	Sniffer         RawSniffer                `yaml:"sniffer" json:"sniffer"`
+	ProxyProvider   map[string]map[string]any `yaml:"proxy-providers" json:"proxy-providers"`
+	RuleProvider    map[string]map[string]any `yaml:"rule-providers" json:"rule-provider"`
+	Hosts           map[string]string         `yaml:"hosts" json:"hosts"`
+	DNS             RawDNS                    `yaml:"dns" json:"dns"`
+	Experimental    Experimental              `yaml:"experimental" json:"experimental"`
+	Profile         Profile                   `yaml:"profile" json:"profile"`
+	GeoXUrl         RawGeoXUrl                `yaml:"geox-url" json:"geox-url"`
+	Proxy           []map[string]any          `yaml:"proxies" json:"proxies"`
+	ProxyGroup      []map[string]any          `yaml:"proxy-groups" json:"proxy-groups"`
+	Rule            []string                  `yaml:"rules" json:"rules"`
+	SubRules        map[string][]string       `yaml:"sub-rules"`
+	ClashForAndroid RawClashForAndroid        `yaml:"clash-for-android" json:"clash-for-android"`
 }
 
 type RawGeoXUrl struct {

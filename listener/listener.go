@@ -10,7 +10,6 @@ import (
 	"github.com/Dreamacro/clash/adapter/inbound"
 	C "github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/listener/http"
-	"github.com/Dreamacro/clash/listener/inner"
 	"github.com/Dreamacro/clash/listener/mixed"
 	"github.com/Dreamacro/clash/listener/socks"
 	"github.com/Dreamacro/clash/log"
@@ -27,12 +26,9 @@ var (
 	mixedUDPLister   *socks.UDPListener
 
 	// lock for recreate function
-	socksMux  sync.Mutex
-	httpMux   sync.Mutex
-	redirMux  sync.Mutex
-	tproxyMux sync.Mutex
-	mixedMux  sync.Mutex
-	tunMux    sync.Mutex
+	socksMux sync.Mutex
+	httpMux  sync.Mutex
+	mixedMux sync.Mutex
 )
 
 type Ports struct {
