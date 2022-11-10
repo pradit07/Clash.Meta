@@ -109,9 +109,9 @@ type Profile struct {
 type Sniffer struct {
 	Enable          bool
 	Sniffers        []sniffer.Type
-	Reverses        *trie.DomainTrie[bool]
-	ForceDomain     *trie.DomainTrie[bool]
-	SkipDomain      *trie.DomainTrie[bool]
+	Reverses        *trie.DomainTrie[struct{}]
+	ForceDomain     *trie.DomainTrie[struct{}]
+	SkipDomain      *trie.DomainTrie[struct{}]
 	Ports           *[]utils.Range[uint16]
 	ForceDnsMapping bool
 	ParsePureIp     bool
@@ -908,35 +908,36 @@ func parseDNS(rawCfg *RawConfig, hosts *trie.DomainTrie[netip.Addr], rules []C.R
 		}
 	}
 
+	fakeIPRange, err := netip.ParsePrefix(cfg.FakeIPRange)
+	T.SetFakeIPRange(fakeIPRange)
 	if cfg.EnhancedMode == C.DNSFakeIP {
-		ipnet, err := netip.ParsePrefix(cfg.FakeIPRange)
 		if err != nil {
 			return nil, err
 		}
 
-		var host *trie.DomainTrie[bool]
+		var host *trie.DomainTrie[struct{}]
 		// fake ip skip host filter
 		if len(cfg.FakeIPFilter) != 0 {
-			host = trie.New[bool]()
+			host = trie.New[struct{}]()
 			for _, domain := range cfg.FakeIPFilter {
-				_ = host.Insert(domain, true)
+				_ = host.Insert(domain, struct{}{})
 			}
 		}
 
 		if len(dnsCfg.Fallback) != 0 {
 			if host == nil {
-				host = trie.New[bool]()
+				host = trie.New[struct{}]()
 			}
 			for _, fb := range dnsCfg.Fallback {
 				if net.ParseIP(fb.Addr) != nil {
 					continue
 				}
-				_ = host.Insert(fb.Addr, true)
+				_ = host.Insert(fb.Addr, struct{}{})
 			}
 		}
 
 		pool, err := fakeip.New(fakeip.Options{
-			IPNet:       &ipnet,
+			IPNet:       &fakeIPRange,
 			Size:        1000,
 			Host:        host,
 			Persistence: rawCfg.Profile.StoreFakeIP,
@@ -1034,17 +1035,17 @@ func parseSniffer(snifferRaw RawSniffer) (*Sniffer, error) {
 	for st := range loadSniffer {
 		sniffer.Sniffers = append(sniffer.Sniffers, st)
 	}
-	sniffer.ForceDomain = trie.New[bool]()
+	sniffer.ForceDomain = trie.New[struct{}]()
 	for _, domain := range snifferRaw.ForceDomain {
-		err := sniffer.ForceDomain.Insert(domain, true)
+		err := sniffer.ForceDomain.Insert(domain, struct{}{})
 		if err != nil {
 			return nil, fmt.Errorf("error domian[%s] in force-domain, error:%v", domain, err)
 		}
 	}
 
-	sniffer.SkipDomain = trie.New[bool]()
+	sniffer.SkipDomain = trie.New[struct{}]()
 	for _, domain := range snifferRaw.SkipDomain {
-		err := sniffer.SkipDomain.Insert(domain, true)
+		err := sniffer.SkipDomain.Insert(domain, struct{}{})
 		if err != nil {
 			return nil, fmt.Errorf("error domian[%s] in force-domain, error:%v", domain, err)
 		}

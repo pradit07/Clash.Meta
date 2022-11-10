@@ -30,7 +30,7 @@ var (
 	proxies        = make(map[string]C.Proxy)
 	providers      map[string]provider.ProxyProvider
 	ruleProviders  map[string]provider.RuleProvider
-	sniffingEnable bool
+	sniffingEnable = false
 	configMux      sync.RWMutex
 
 	// Outbound Rule
@@ -40,7 +40,17 @@ var (
 	udpTimeout        = 60 * time.Second
 	procesCache       string
 	alwaysFindProcess = false
+
+	fakeIPRange netip.Prefix
 )
+
+func SetFakeIPRange(p netip.Prefix) {
+	fakeIPRange = p
+}
+
+func FakeIPRange() netip.Prefix {
+	return fakeIPRange
+}
 
 func SetSniffing(b bool) {
 	if sniffer.Dispatcher.Enable() {
@@ -107,7 +117,7 @@ func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]provid
 func UpdateSniffer(dispatcher *sniffer.SnifferDispatcher) {
 	configMux.Lock()
 	sniffer.Dispatcher = dispatcher
-	sniffingEnable = true
+	sniffingEnable = dispatcher.Enable()
 	configMux.Unlock()
 }
 
@@ -177,7 +187,7 @@ func preHandleMetadata(metadata *C.Metadata) error {
 				metadata.DNSMode = C.DNSFakeIP
 			} else if node := resolver.DefaultHosts.Search(host); node != nil {
 				// redir-host should lookup the hosts
-				metadata.DstIP = node.Data
+				metadata.DstIP = node.Data()
 			}
 		} else if resolver.IsFakeIP(metadata.DstIP) {
 			return fmt.Errorf("fake DNS record %s missing", metadata.DstIP)
@@ -332,9 +342,11 @@ func handleTCPConn(connCtx C.ConnContext) {
 	dialMetadata := metadata
 	if len(metadata.Host) > 0 {
 		if node := resolver.DefaultHosts.Search(metadata.Host); node != nil {
-			dialMetadata.DstIP = node.Data
-			dialMetadata.DNSMode = C.DNSHosts
-			dialMetadata = dialMetadata.Pure()
+			if dstIp := node.Data(); !FakeIPRange().Contains(dstIp) {
+				dialMetadata.DstIP = dstIp
+				dialMetadata.DNSMode = C.DNSHosts
+				dialMetadata = dialMetadata.Pure()
+			}
 		}
 	}
 
@@ -386,7 +398,7 @@ func match(metadata *C.Metadata) (C.Proxy, C.Rule, error) {
 	)
 
 	if node := resolver.DefaultHosts.Search(metadata.Host); node != nil {
-		metadata.DstIP = node.Data
+		metadata.DstIP = node.Data()
 		resolved = true
 	}
 

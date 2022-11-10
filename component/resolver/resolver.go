@@ -127,7 +127,7 @@ func ResolveAllIPv6WithResolver(host string, r Resolver) ([]netip.Addr, error) {
 	}
 
 	if node := DefaultHosts.Search(host); node != nil {
-		if ip := node.Data; ip.Is6() {
+		if ip := node.Data(); ip.Is6() {
 			return []netip.Addr{ip}, nil
 		}
 	}
@@ -154,15 +154,23 @@ func ResolveAllIPv6WithResolver(host string, r Resolver) ([]netip.Addr, error) {
 			return []netip.Addr{}, ErrIPNotFound
 		}
 
-		return []netip.Addr{netip.AddrFrom16(*(*[16]byte)(ipAddrs[rand.Intn(len(ipAddrs))]))}, nil
+		addrs := make([]netip.Addr, 0, len(ipAddrs))
+		for _, ipAddr := range ipAddrs {
+			addrs = append(addrs, nnip.IpToAddr(ipAddr))
+		}
+
+		rand.Shuffle(len(addrs), func(i, j int) {
+			addrs[i], addrs[j] = addrs[j], addrs[i]
+		})
+		return addrs, nil
 	}
 	return []netip.Addr{}, ErrIPNotFound
 }
 
 func ResolveAllIPv4WithResolver(host string, r Resolver) ([]netip.Addr, error) {
 	if node := DefaultHosts.Search(host); node != nil {
-		if ip := node.Data; ip.Is4() {
-			return []netip.Addr{node.Data}, nil
+		if ip := node.Data(); ip.Is4() {
+			return []netip.Addr{node.Data()}, nil
 		}
 	}
 
@@ -188,19 +196,22 @@ func ResolveAllIPv4WithResolver(host string, r Resolver) ([]netip.Addr, error) {
 			return []netip.Addr{}, ErrIPNotFound
 		}
 
-		ip := ipAddrs[rand.Intn(len(ipAddrs))].To4()
-		if ip == nil {
-			return []netip.Addr{}, ErrIPVersion
+		addrs := make([]netip.Addr, 0, len(ipAddrs))
+		for _, ipAddr := range ipAddrs {
+			addrs = append(addrs, nnip.IpToAddr(ipAddr))
 		}
 
-		return []netip.Addr{netip.AddrFrom4(*(*[4]byte)(ip))}, nil
+		rand.Shuffle(len(addrs), func(i, j int) {
+			addrs[i], addrs[j] = addrs[j], addrs[i]
+		})
+		return addrs, nil
 	}
 	return []netip.Addr{}, ErrIPNotFound
 }
 
 func ResolveAllIPWithResolver(host string, r Resolver) ([]netip.Addr, error) {
 	if node := DefaultHosts.Search(host); node != nil {
-		return []netip.Addr{node.Data}, nil
+		return []netip.Addr{node.Data()}, nil
 	}
 
 	ip, err := netip.ParseAddr(host)
@@ -219,12 +230,21 @@ func ResolveAllIPWithResolver(host string, r Resolver) ([]netip.Addr, error) {
 	}
 
 	if DefaultResolver == nil {
-		ipAddr, err := net.ResolveIPAddr("ip", host)
+		ipAddrs, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
 		if err != nil {
 			return []netip.Addr{}, err
+		} else if len(ipAddrs) == 0 {
+			return []netip.Addr{}, ErrIPNotFound
+		}
+		addrs := make([]netip.Addr, 0, len(ipAddrs))
+		for _, ipAddr := range ipAddrs {
+			addrs = append(addrs, nnip.IpToAddr(ipAddr))
 		}
 
-		return []netip.Addr{nnip.IpToAddr(ipAddr.IP)}, nil
+		rand.Shuffle(len(addrs), func(i, j int) {
+			addrs[i], addrs[j] = addrs[j], addrs[i]
+		})
+		return addrs, nil
 	}
 	return []netip.Addr{}, ErrIPNotFound
 }
